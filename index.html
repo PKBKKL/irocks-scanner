@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Daftar Ulang — The 2nd iRocks Workshop 2026</title>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+           background: #f3f5f7; color: #1d2733; }
+    .wrap { max-width: 480px; margin: 0 auto; padding: 16px 16px 48px; }
+    h1 { font-size: 18px; margin: 0 0 12px; }
+    .card { background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    label { font-size: 14px; font-weight: 600; display: block; margin: 8px 0 6px; }
+    input { width: 100%; padding: 12px; font-size: 16px; border: 1px solid #c9d1d9; border-radius: 8px; }
+    button { width: 100%; margin-top: 12px; padding: 12px; font-size: 16px; font-weight: 600;
+             border: 0; border-radius: 8px; background: #0b5cad; color: #fff; cursor: pointer; }
+    button:disabled { opacity: .6; }
+    button.small { width: auto; margin: 0; padding: 8px 12px; font-size: 14px; }
+    .msg { margin-top: 10px; font-size: 14px; color: #b42318; }
+    .hidden { display: none; }
+    .stats { display: flex; justify-content: space-between; align-items: center; font-size: 15px; }
+    .stats b { font-size: 22px; }
+    #reader { width: 100%; }
+    .res { border-radius: 12px; padding: 16px; margin-bottom: 12px; color: #fff; }
+    .res.ok { background: #1a7f37; } .res.duplicate { background: #b7791f; } .res.invalid { background: #b42318; }
+    .res h2 { margin: 0 0 8px; font-size: 20px; }
+    .res .row { font-size: 15px; margin: 2px 0; word-break: break-word; }
+    .item { display: flex; justify-content: space-between; align-items: center; gap: 8px;
+            padding: 10px 0; border-top: 1px solid #eef1f4; font-size: 14px; }
+    .item small { color: #5b6773; }
+    .tag { font-size: 12px; color: #1a7f37; font-weight: 600; }
+    .note { font-size: 13px; color: #5b6773; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Daftar Ulang — The 2nd iRocks Workshop 2026</h1>
+
+  <div class="card" id="loginCard">
+    <p class="note">Halaman ini khusus panitia.</p>
+    <label for="pin">PIN panitia</label>
+    <input id="pin" type="password" inputmode="numeric" autocomplete="off">
+    <label for="panitia">Nama panitia</label>
+    <input id="panitia" type="text" placeholder="mis. Safira">
+    <button id="loginBtn">Masuk</button>
+    <div class="msg" id="loginMsg"></div>
+  </div>
+
+  <div id="app" class="hidden">
+    <div class="card stats">
+      <span>Hadir: <b id="hadir">0</b> / <span id="total">0</span></span>
+      <button class="small" id="logoutBtn" style="background:#e6ebf0;color:#1d2733">Keluar</button>
+    </div>
+    <div id="result"></div>
+    <div class="card">
+      <div id="reader"></div>
+      <p class="note" id="camNote">Menyalakan kamera...</p>
+    </div>
+    <div class="card">
+      <label for="q">Cari manual (nama / email)</label>
+      <input id="q" type="search" placeholder="ketik minimal 2 huruf">
+      <div id="list"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ====== GANTI dengan Web app URL dari Apps Script (yang berakhiran /exec) ======
+  const API_URL = 'PASTE_WEB_APP_URL_DI_SINI';
+  // ===============================================================================
+
+  const $ = id => document.getElementById(id);
+  let PIN = localStorage.getItem('irocks_pin') || '';
+  let PANITIA = localStorage.getItem('irocks_panitia') || '';
+  let busy = false, lastRaw = '', lastAt = 0;
+  $('panitia').value = PANITIA;
+
+  async function api(action, params) {
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // text/plain = tanpa CORS preflight
+      body: JSON.stringify(Object.assign({ action: action, pin: PIN }, params || {})),
+    });
+    const json = await res.json();
+    if (!json.ok) throw new Error(json.error || 'Terjadi kesalahan.');
+    return json.data;
+  }
+
+  // ---------- Login ----------
+  $('loginBtn').onclick = () => login($('pin').value.trim(), $('panitia').value.trim());
+  $('logoutBtn').onclick = () => { localStorage.removeItem('irocks_pin'); location.reload(); };
+
+  async function login(pin, panitia) {
+    $('loginMsg').textContent = '';
+    $('loginBtn').disabled = true;
+    PIN = pin;
+    try {
+      const stats = await api('verifyPin');
+      PANITIA = panitia;
+      localStorage.setItem('irocks_pin', pin);
+      localStorage.setItem('irocks_panitia', panitia);
+      $('loginCard').classList.add('hidden');
+      $('app').classList.remove('hidden');
+      setStats(stats);
+      startCamera();
+    } catch (e) {
+      $('loginBtn').disabled = false;
+      $('loginMsg').textContent = e.message;
+      localStorage.removeItem('irocks_pin');
+    }
+  }
+
+  // ---------- Check-in ----------
+  async function doCheckIn(raw, metode) {
+    busy = true;
+    showResult({ status: 'loading' });
+    try {
+      const res = await api('checkIn', { raw: raw, panitia: PANITIA, metode: metode });
+      showResult(res);
+      if (res.stats) setStats(res.stats);
+      if (navigator.vibrate) navigator.vibrate(res.status === 'ok' ? 100 : [100, 80, 100]);
+    } catch (e) {
+      showResult({ status: 'invalid', msg: e.message });
+    }
+    setTimeout(() => { busy = false; }, 1500);
+  }
+
+  function showResult(r) {
+    const box = $('result');
+    box.innerHTML = '';
+    if (r.status === 'loading') { box.innerHTML = '<div class="card">Memproses...</div>'; return; }
+    const div = document.createElement('div');
+    div.className = 'res ' + r.status;
+    const title = { ok: '✔ Berhasil daftar ulang', duplicate: '⚠ Sudah daftar ulang', invalid: '✖ Gagal' }[r.status];
+    addLine(div, 'h2', title + (r.waktu ? ' (' + r.waktu + ')' : ''));
+    if (r.peserta) {
+      addLine(div, 'div', r.peserta.nama, 'row').style.fontWeight = '700';
+      addLine(div, 'div', '✉ ' + r.peserta.email, 'row');
+      addLine(div, 'div', '☎ ' + (r.peserta.hp || '-'), 'row');
+      addLine(div, 'div', r.peserta.kategori + ' · ' + r.peserta.institusi, 'row');
+    }
+    if (r.msg) addLine(div, 'div', r.msg, 'row');
+    box.appendChild(div);
+  }
+
+  function addLine(parent, tag, text, cls) {
+    const el = document.createElement(tag);
+    el.textContent = text;
+    if (cls) el.className = cls;
+    parent.appendChild(el);
+    return el;
+  }
+
+  function setStats(s) { $('hadir').textContent = s.hadir; $('total').textContent = s.total; }
+
+  // ---------- Kamera ----------
+  function startCamera() {
+    if (typeof Html5Qrcode === 'undefined') { $('camNote').textContent = 'Library scanner gagal dimuat.'; return; }
+    const scanner = new Html5Qrcode('reader');
+    scanner.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: 240, height: 240 } }, onScan, () => {})
+      .then(() => { $('camNote').textContent = 'Arahkan kamera ke QR Code peserta.'; })
+      .catch(err => {
+        $('camNote').textContent = 'Kamera tidak bisa diakses (' + err + '). Izinkan akses kamera di browser, ' +
+          'lalu muat ulang halaman. Sementara gunakan pencarian manual di bawah.';
+      });
+  }
+
+  function onScan(text) {
+    const now = Date.now();
+    if (busy || (text === lastRaw && now - lastAt < 5000)) return;
+    lastRaw = text; lastAt = now;
+    doCheckIn(text, 'Scan');
+  }
+
+  // ---------- Pencarian manual ----------
+  let searchTimer = null;
+  $('q').addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(async () => {
+      const q = $('q').value.trim();
+      if (q.length < 2) { $('list').innerHTML = ''; return; }
+      try { renderList(await api('searchPeserta', { q: q })); }
+      catch (e) { showResult({ status: 'invalid', msg: e.message }); }
+    }, 400);
+  });
+
+  function renderList(items) {
+    const list = $('list');
+    list.innerHTML = '';
+    if (!items.length) { addLine(list, 'p', 'Tidak ditemukan.', 'note'); return; }
+    items.forEach(p => {
+      const row = document.createElement('div'); row.className = 'item';
+      const info = document.createElement('div');
+      addLine(info, 'div', p.nama);
+      addLine(info, 'small', p.email);
+      row.appendChild(info);
+      if (p.hadir) { addLine(row, 'span', 'Sudah hadir', 'tag'); }
+      else {
+        const b = document.createElement('button'); b.className = 'small'; b.textContent = 'Check-in';
+        b.onclick = () => { doCheckIn(p.token, 'Manual'); $('q').value = ''; list.innerHTML = ''; };
+        row.appendChild(b);
+      }
+      list.appendChild(row);
+    });
+  }
+
+  if (PIN) login(PIN, PANITIA);
+</script>
+</body>
+</html>
