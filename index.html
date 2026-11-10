@@ -64,6 +64,14 @@
       <input id="q" type="search" placeholder="ketik minimal 2 huruf">
       <div id="list"></div>
     </div>
+    <div class="card">
+      <div class="stats">
+        <label style="margin:0">Daftar hadir (<span id="nHadir">0</span>)</label>
+        <button class="small" id="refreshBtn">↻ Muat ulang</button>
+      </div>
+      <p class="note">📄 = sertifikat sudah dibuat · ⏳ = sedang dibuat (maks. 5 menit) · ✅ = sertifikat terkirim</p>
+      <div id="hadirList"></div>
+    </div>
   </div>
 </div>
 
@@ -106,6 +114,7 @@
       $('app').classList.remove('hidden');
       setStats(stats);
       startCamera();
+      loadHadir();
     } catch (e) {
       $('loginBtn').disabled = false;
       $('loginMsg').textContent = e.message;
@@ -121,6 +130,7 @@
       const res = await api('checkIn', { raw: raw, panitia: PANITIA, metode: metode });
       showResult(res);
       if (res.stats) setStats(res.stats);
+      if (res.status === 'ok') loadHadir();
       if (navigator.vibrate) navigator.vibrate(res.status === 'ok' ? 100 : [100, 80, 100]);
     } catch (e) {
       showResult({ status: 'invalid', msg: e.message });
@@ -142,8 +152,33 @@
       addLine(div, 'div', '☎ ' + (r.peserta.hp || '-'), 'row');
       addLine(div, 'div', r.peserta.kategori + ' · ' + r.peserta.institusi, 'row');
     }
+    if (r.notif) addLine(div, 'div', '📧 Notifikasi ke peserta: ' + r.notif, 'row');
     if (r.msg) addLine(div, 'div', r.msg, 'row');
     box.appendChild(div);
+  }
+
+  // ---------- Daftar hadir ----------
+  $('refreshBtn').onclick = () => loadHadir();
+
+  async function loadHadir() {
+    try {
+      const items = await api('listHadir');
+      $('nHadir').textContent = items.length;
+      const box = $('hadirList');
+      box.innerHTML = '';
+      if (!items.length) { addLine(box, 'p', 'Belum ada yang daftar ulang.', 'note'); return; }
+      items.forEach(p => {
+        const row = document.createElement('div'); row.className = 'item';
+        const info = document.createElement('div');
+        addLine(info, 'div', p.nama);
+        addLine(info, 'small', p.waktu + ' · ' + p.email + (p.notif && p.notif.indexOf('Gagal') === 0 ? ' · ⚠ notif gagal' : ''));
+        row.appendChild(info);
+        addLine(row, 'span', p.terkirim ? '✅' : (p.sertifikat ? '📄' : '⏳'));
+        box.appendChild(row);
+      });
+    } catch (e) {
+      $('hadirList').textContent = 'Gagal memuat daftar: ' + e.message;
+    }
   }
 
   function addLine(parent, tag, text, cls) {
